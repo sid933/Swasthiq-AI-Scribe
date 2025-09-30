@@ -1,0 +1,7 @@
+streamlit
+openai
+whisper
+twilio
+numpy
+scipy
+email_validator

@@ -44,58 +44,59 @@ def initialize_session_state():
 def transcribe_audio_sarvam_api(audio_bytes):
     """
     Transcribes the audio using the Sarvam REST API (single synchronous call).
-    This function uses the highly probable correct endpoint to resolve the 404 error.
+    This function uses the exact endpoint derived from the curl request to resolve the 404 error.
     """
     sarvam_api_key = os.environ.get('SARVAM_AI_API_KEY')
     if not sarvam_api_key:
         return "Transcription API Error: SARVAM_AI_API_KEY not found in environment secrets."
 
+    # --- DEFINITIVE ENDPOINT from Documentation ---
+    REST_API_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
+    
+    # --- Headers: Note that Sarvam uses a non-standard header key ---
     headers = {
-        "Authorization": f"Bearer {sarvam_api_key}",
-        # Note: Content-Type is set automatically by requests when using the 'files' parameter below.
+        "api-subscription-key": sarvam_api_key, # Use the exact header key specified in the curl
     }
     
-    # 1. Prepare Audio Data
-    # We create a file-like object in memory from the bytes for the 'files' argument
+    # Prepare Audio Data as a file-like object for multipart/form-data
     audio_file_in_memory = BytesIO(audio_bytes)
-    audio_file_in_memory.name = 'audio.wav' # Required by requests for multipart form data
+    audio_file_in_memory.name = 'audio.wav' # Required by requests for the file parameter
 
+    # The 'file' parameter in the curl command translates to the 'files' dictionary in requests
     files = {
         'file': (audio_file_in_memory.name, audio_file_in_memory, 'audio/wav')
     }
     
-    # Data payload, including necessary parameters
+    # Data payload (for transcription parameters)
     data = {
-        'language_code': 'en-IN', # Use en-IN for code-mix hint
-        'model': 'saarika:v2.5', # Recommended model from docs
-        'with_diarization': 'false', # Diarization is usually Batch-only or a separate feature/model.
+        'language_code': 'en-IN',
+        'model': 'saarika:v2.5', # Recommended model
+        'with_diarization': 'false', # Diarization is usually a separate model or Batch-only
     }
-    
-    # --- Final Corrected Endpoint ---
-    REST_API_ENDPOINT = f"{SARVAM_BASE_URL}/v1/speech-to-text"
 
     try:
-        # 2. Send the synchronous request
+        # 1. Send the synchronous request
+        # Note: We must pass the API key in the custom header AND ensure Content-Type is multipart/form-data
         response = requests.post(
             REST_API_ENDPOINT,
             headers=headers,
             files=files,
             data=data
         )
-        response.raise_for_status() # Raise exception for 4xx or 5xx status codes
+        response.raise_for_status() # Raise exception for 4xx (like the 404) or 5xx status codes
         
         response_data = response.json()
         
-        # 3. Extract the transcript
+        # 2. Extract the transcript
         if 'transcript' in response_data:
             return response_data['transcript']
         
-        # Handle API error response specific to content/processing failure
+        # Handle API content error
         error_message = response_data.get('message', 'Unknown processing error from Sarvam.')
         return f"Sarvam Transcription Error: {error_message}"
 
     except requests.exceptions.HTTPError as e:
-        # This catches Authentication (401), Not Found (404), or Server Errors (500)
+        # Catches the 404 error we were seeing, plus 401 (Auth)
         return f"Sarvam API Failed: HTTP Error {e.response.status_code}. Check key or endpoint: {REST_API_ENDPOINT}"
     except requests.exceptions.RequestException as e:
         return f"Network Error: Could not connect to Sarvam API. Details: {e}"

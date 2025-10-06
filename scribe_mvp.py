@@ -7,6 +7,7 @@ import smtplib
 from email.mime.text import MIMEText
 from twilio.rest import Client
 from datetime import datetime
+from sarvamai import SarvamAI
 import requests
 import time
 from email_validator import validate_email, EmailNotValidError

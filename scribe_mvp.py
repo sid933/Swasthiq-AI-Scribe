@@ -43,63 +43,75 @@ def initialize_session_state():
 
 def transcribe_audio_sarvam_api(audio_bytes):
     """
-    Transcribes the audio using the Sarvam REST API (single synchronous call).
-    This function uses the exact endpoint derived from the curl request to resolve the 404 error.
+    Transcribes the audio using the official Sarvam Batch STT SDK (Synchronous Method).
+    This function handles saving the in-memory audio to a temporary file for the SDK.
     """
     sarvam_api_key = os.environ.get('SARVAM_AI_API_KEY')
     if not sarvam_api_key:
         return "Transcription API Error: SARVAM_AI_API_KEY not found in environment secrets."
-
-    # --- DEFINITIVE ENDPOINT from Documentation ---
-    REST_API_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
     
-    # --- Headers: Note that Sarvam uses a non-standard header key ---
-    headers = {
-        "api-subscription-key": sarvam_api_key, # Use the exact header key specified in the curl
-    }
-    
-    # Prepare Audio Data as a file-like object for multipart/form-data
-    audio_file_in_memory = BytesIO(audio_bytes)
-    audio_file_in_memory.name = 'audio.wav' # Required by requests for the file parameter
-
-    # The 'file' parameter in the curl command translates to the 'files' dictionary in requests
-    files = {
-        'file': (audio_file_in_memory.name, audio_file_in_memory, 'audio/wav')
-    }
-    
-    # Data payload (for transcription parameters)
-    data = {
-        'language_code': 'en-IN',
-        'model': 'saarika:v2.5', # Recommended model
-        'with_diarization': 'false', # Diarization is usually a separate model or Batch-only
-    }
-
+    # 1. Save in-memory audio bytes to a temporary file
     try:
-        # 1. Send the synchronous request
-        # Note: We must pass the API key in the custom header AND ensure Content-Type is multipart/form-data
-        response = requests.post(
-            REST_API_ENDPOINT,
-            headers=headers,
-            files=files,
-            data=data
-        )
-        response.raise_for_status() # Raise exception for 4xx (like the 404) or 5xx status codes
-        
-        response_data = response.json()
-        
-        # 2. Extract the transcript
-        if 'transcript' in response_data:
-            return response_data['transcript']
-        
-        # Handle API content error
-        error_message = response_data.get('message', 'Unknown processing error from Sarvam.')
-        return f"Sarvam Transcription Error: {error_message}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_bytes)
+            audio_path = tmp_file.name
+    except Exception as e:
+        return f"File System Error: Could not save temporary audio file. Details: {e}"
 
-    except requests.exceptions.HTTPError as e:
-        # Catches the 404 error we were seeing, plus 401 (Auth)
-        return f"Sarvam API Failed: HTTP Error {e.response.status_code}. Check key or endpoint: {REST_API_ENDPOINT}"
-    except requests.exceptions.RequestException as e:
-        return f"Network Error: Could not connect to Sarvam API. Details: {e}"
+    # 2. Initialize and Execute the Sarvam Job
+    output_dir = os.path.join(tempfile.gettempdir(), f"sarvam_output_{int(time.time())}")
+    
+    try:
+        # Initialize Sarvam Client
+        client = SarvamAI(api_subscription_key=sarvam_api_key)
+
+        # Create the Transcription Job (Includes Diarization for Doctor/Patient separation)
+        job = client.speech_to_text_job.create_job(
+            language_code="en-IN",
+            model="saarika:v2.5",
+            with_diarization=True,
+            num_speakers=2 # Assuming 2 speakers: Doctor and Patient
+        )
+
+        # Upload the temporary audio file
+        job.upload_files(file_paths=[audio_path])
+
+        # Start the job and wait for completion (Synchronous)
+        job.start()
+        final_status = job.wait_until_complete()
+
+        if job.is_failed():
+            return f"Sarvam Job Failed: Status was FAILED. Check Sarvam logs for job {job.job_id}."
+
+        # 3. Download and Extract the Transcript
+        # Download output to a temporary directory
+        job.download_outputs(output_dir=output_dir)
+
+        # We need to find the transcription file (assuming one file per job)
+        transcript_file_path = None
+        for filename in os.listdir(output_dir):
+            if filename.endswith('.txt') or filename.endswith('.json'):
+                transcript_file_path = os.path.join(output_dir, filename)
+                break
+        
+        if transcript_file_path:
+            with open(transcript_file_path, 'r', encoding='utf-8') as f:
+                # Assuming the output is plain text for simplicity
+                transcript = f.read() 
+                return transcript
+        else:
+            return "Sarvam Output Error: Transcript file not found in downloaded output."
+
+    except Exception as e:
+        return f"Sarvam SDK Execution Error: An unexpected error occurred during job processing. Details: {e}"
+
+    finally:
+        # 4. Cleanup temporary files and directories
+        if os.path.exists(audio_path):
+            os.unlink(audio_path)
+        if os.path.exists(output_dir):
+            import shutil
+            shutil.rmtree(output_dir) 
 
     # 4. --- POLLING STAGE: Check job status until complete (Max 5 minutes) ---
     max_checks = 30

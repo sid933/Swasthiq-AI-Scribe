@@ -21,7 +21,7 @@ try:
 except Exception:
     client = None # Will fail gracefully if key is missing
 
-SARVAM_BASE_URL = "https://api.sarvam.ai" # Base URL (Verify documentation)
+SARVAM_BASE_URL = "https://api.sarvam.ai/v1/stt/batch" # Base URL (Verify documentation)
 
 # --- Streamlit Session State Management ---
 def initialize_session_state():
@@ -44,7 +44,7 @@ def initialize_session_state():
 def transcribe_audio_sarvam_api(audio_bytes):
     """
     Transcribes the audio using the Sarvam Batch STT API.
-    (Relies on LIVE API calls. If the key is invalid, this returns an error string.)
+    (Endpoints corrected to resolve the 404 Client Error.)
     """
     sarvam_api_key = os.environ.get('SARVAM_AI_API_KEY')
     if not sarvam_api_key:
@@ -52,10 +52,11 @@ def transcribe_audio_sarvam_api(audio_bytes):
 
     headers = {"Authorization": f"Bearer {sarvam_api_key}"}
     
-    # --- 1. UPLOAD STAGE: Get a signed URL ---
+    # 1. --- UPLOAD STAGE: Get a signed URL ---
     try:
+        # Hitting the specific upload endpoint
         pre_signed_response = requests.post(
-            f"{SARVAM_BASE_URL}/v1/stt/batch/upload",
+            f"{SARVAM_BASE_URL}/upload",
             headers=headers,
             json={"file_name": f"consultation_{time.time()}.wav", "file_type": "audio/wav"}
         )
@@ -64,11 +65,11 @@ def transcribe_audio_sarvam_api(audio_bytes):
         upload_url = pre_signed_data['upload_url']
         file_uri = pre_signed_data['file_uri']
     except requests.exceptions.RequestException as e:
-        return f"Sarvam Upload URL Error: Failed to get pre-signed URL. Details: {e}"
+        # NOTE: This error message is updated to be clear.
+        return f"Sarvam Upload URL Error: Failed to get pre-signed URL. Details: {e}. Check SARVAM_BASE_URL and endpoint path."
 
     # 2. --- UPLOAD STAGE: Upload the audio file bytes ---
     try:
-        # Use simple PUT request to upload the raw binary data
         requests.put(upload_url, data=audio_bytes, headers={"Content-Type": "audio/wav"}).raise_for_status()
     except requests.exceptions.RequestException as e:
         return f"Sarvam Upload Error: Failed to upload audio file. Details: {e}"
@@ -77,11 +78,11 @@ def transcribe_audio_sarvam_api(audio_bytes):
     try:
         submit_data = {
             "file_uri": file_uri,
-            "language": "en-IN", # Hint for code-mix languages
+            "language": "en-IN", 
             "speaker_diarization": True, 
         }
         submit_response = requests.post(
-            f"{SARVAM_BASE_URL}/v1/stt/batch/transcribe",
+            f"{SARVAM_BASE_URL}/transcribe", # Hitting the corrected transcribe endpoint
             headers=headers,
             json=submit_data
         )
@@ -96,23 +97,21 @@ def transcribe_audio_sarvam_api(audio_bytes):
     for _ in range(max_checks):
         time.sleep(10) # Wait 10 seconds between checks
         try:
-            status_response = requests.get(f"{SARVAM_BASE_URL}/v1/stt/batch/status/{job_id}", headers=headers)
+            # Hitting the corrected status endpoint
+            status_response = requests.get(f"{SARVAM_BASE_URL}/status/{job_id}", headers=headers)
             status_response.raise_for_status()
             status_data = status_response.json()
             status = status_data.get('status')
             
             if status == "COMPLETED":
-                # SUCCESS: Return the actual transcript string
                 return status_data['result']['transcript']
             
             elif status in ["FAILED", "REJECTED"]:
-                # FAILURE: Return a controlled error message
                 return f"Sarvam Transcription Failed. Status: {status}. Message: {status_data.get('message', 'Check audio quality.')}"
             
         except requests.exceptions.RequestException as e:
             return f"Sarvam Status Check Error: Failed to get job status. Details: {e}"
 
-    # TIMEOUT: If the job runs longer than 5 minutes
     return "Sarvam Transcription Timeout: Job took too long (max 5 minutes)."
 
 

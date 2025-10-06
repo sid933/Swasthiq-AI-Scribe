@@ -21,7 +21,7 @@ try:
 except Exception:
     client = None # Will fail gracefully if key is missing
 
-SARVAM_BASE_URL = "https://api.sarvam.ai/v1/stt/batch" # Base URL (Verify documentation)
+SARVAM_BASE_URL = "https://api.sarvam.ai/v1/stt/batch/upload" # Base URL (Verify documentation)
 
 # --- Streamlit Session State Management ---
 def initialize_session_state():

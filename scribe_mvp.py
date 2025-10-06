@@ -43,53 +43,63 @@ def initialize_session_state():
 
 def transcribe_audio_sarvam_api(audio_bytes):
     """
-    Transcribes the audio using the Sarvam Batch STT API.
-    (Endpoints corrected to resolve the 404 Client Error.)
+    Transcribes the audio using the Sarvam REST API (single synchronous call).
+    This simplifies the logic and avoids the polling complexity of the batch job.
     """
     sarvam_api_key = os.environ.get('SARVAM_AI_API_KEY')
     if not sarvam_api_key:
         return "Transcription API Error: SARVAM_AI_API_KEY not found in environment secrets."
 
-    headers = {"Authorization": f"Bearer {sarvam_api_key}"}
+    # Using the documented REST endpoint structure (adjusting path based on your 404 errors)
+    # The endpoint for direct transcription often follows a simple pattern:
+    REST_API_ENDPOINT = "https://api.sarvam.ai/v1/stt/rest" 
     
-    # 1. --- UPLOAD STAGE: Get a signed URL ---
-    try:
-        # Hitting the specific upload endpoint
-        pre_signed_response = requests.post(
-            f"{SARVAM_BASE_URL}/upload",
-            headers=headers,
-            json={"file_name": f"consultation_{time.time()}.wav", "file_type": "audio/wav"}
-        )
-        pre_signed_response.raise_for_status()
-        pre_signed_data = pre_signed_response.json()
-        upload_url = pre_signed_data['upload_url']
-        file_uri = pre_signed_data['file_uri']
-    except requests.exceptions.RequestException as e:
-        # NOTE: This error message is updated to be clear.
-        return f"Sarvam Upload URL Error: Failed to get pre-signed URL. Details: {e}. Check SARVAM_BASE_URL and endpoint path."
+    headers = {
+        "Authorization": f"Bearer {sarvam_api_key}",
+        # Content-Type is set for multipart/form-data when sending files, 
+        # but the requests library handles this when using the 'files' parameter.
+    }
+    
+    # We create a file-like object in memory from the bytes for the 'files' argument
+    audio_file_in_memory = BytesIO(audio_bytes)
+    audio_file_in_memory.name = 'audio.wav' # Give it a file name
 
-    # 2. --- UPLOAD STAGE: Upload the audio file bytes ---
-    try:
-        requests.put(upload_url, data=audio_bytes, headers={"Content-Type": "audio/wav"}).raise_for_status()
-    except requests.exceptions.RequestException as e:
-        return f"Sarvam Upload Error: Failed to upload audio file. Details: {e}"
+    files = {
+        'audio': (audio_file_in_memory.name, audio_file_in_memory, 'audio/wav')
+    }
+    
+    data = {
+        'language_code': 'en-IN', # Use en-IN for Hindi/English code-mix hint
+        'speaker_diarization': 'true',
+        'transcription_mode': 'low_latency' # Optimization for speed
+    }
 
-    # 3. --- SUBMIT JOB STAGE: Submit the uploaded file for transcription ---
     try:
-        submit_data = {
-            "file_uri": file_uri,
-            "language": "en-IN", 
-            "speaker_diarization": True, 
-        }
-        submit_response = requests.post(
-            f"{SARVAM_BASE_URL}/transcribe", # Hitting the corrected transcribe endpoint
+        # 1. Send the synchronous request
+        response = requests.post(
+            REST_API_ENDPOINT,
             headers=headers,
-            json=submit_data
+            files=files,
+            data=data
         )
-        submit_response.raise_for_status()
-        job_id = submit_response.json().get('job_id')
+        response.raise_for_status() # Raise exception for 4xx or 5xx status codes
+        
+        response_data = response.json()
+        
+        # 2. Extract the transcript
+        # Check if the expected 'transcript' key exists in the response
+        if 'transcript' in response_data:
+            return response_data['transcript']
+        
+        # Handle API response error specific to content/processing
+        error_message = response_data.get('message', 'Unknown processing error from Sarvam.')
+        return f"Sarvam Transcription Error: {error_message}"
+
+    except requests.exceptions.HTTPError as e:
+        # This catches Authentication (401), Not Found (404), or Server Errors (500)
+        return f"Sarvam API Failed: HTTP Error {e.response.status_code}. Check API key or endpoint: {REST_API_ENDPOINT}"
     except requests.exceptions.RequestException as e:
-        return f"Sarvam Job Submission Error: Failed to submit job. Details: {e}"
+        return f"Network Error: Could not connect to Sarvam API. Details: {e}"
 
     # 4. --- POLLING STAGE: Check job status until complete (Max 5 minutes) ---
     max_checks = 30

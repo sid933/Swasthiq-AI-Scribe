@@ -410,4 +410,4 @@ if __name__ == '__main__':
     st.markdown("---")
     if st.button("Reset Application"):
         st.session_state.clear()
-        st.experimental_rerun()
+        st.rerun()

@@ -21,7 +21,7 @@ try:
 except Exception:
     client = None # Will fail gracefully if key is missing
 
-SARVAM_BASE_URL = "https://api.sarvam.ai/v1/stt/batch/upload" # Base URL (Verify documentation)
+SARVAM_BASE_URL = "https://api.sarvam.ai"  # Base URL (Verify documentation)
 
 # --- Streamlit Session State Management ---
 def initialize_session_state():
@@ -44,38 +44,38 @@ def initialize_session_state():
 def transcribe_audio_sarvam_api(audio_bytes):
     """
     Transcribes the audio using the Sarvam REST API (single synchronous call).
-    This simplifies the logic and avoids the polling complexity of the batch job.
+    This function uses the highly probable correct endpoint to resolve the 404 error.
     """
     sarvam_api_key = os.environ.get('SARVAM_AI_API_KEY')
     if not sarvam_api_key:
         return "Transcription API Error: SARVAM_AI_API_KEY not found in environment secrets."
 
-    # Using the documented REST endpoint structure (adjusting path based on your 404 errors)
-    # The endpoint for direct transcription often follows a simple pattern:
-    REST_API_ENDPOINT = "https://api.sarvam.ai/v1/stt/rest" 
-    
     headers = {
         "Authorization": f"Bearer {sarvam_api_key}",
-        # Content-Type is set for multipart/form-data when sending files, 
-        # but the requests library handles this when using the 'files' parameter.
+        # Note: Content-Type is set automatically by requests when using the 'files' parameter below.
     }
     
+    # 1. Prepare Audio Data
     # We create a file-like object in memory from the bytes for the 'files' argument
     audio_file_in_memory = BytesIO(audio_bytes)
-    audio_file_in_memory.name = 'audio.wav' # Give it a file name
+    audio_file_in_memory.name = 'audio.wav' # Required by requests for multipart form data
 
     files = {
-        'audio': (audio_file_in_memory.name, audio_file_in_memory, 'audio/wav')
+        'file': (audio_file_in_memory.name, audio_file_in_memory, 'audio/wav')
     }
     
+    # Data payload, including necessary parameters
     data = {
-        'language_code': 'en-IN', # Use en-IN for Hindi/English code-mix hint
-        'speaker_diarization': 'true',
-        'transcription_mode': 'low_latency' # Optimization for speed
+        'language_code': 'en-IN', # Use en-IN for code-mix hint
+        'model': 'saarika:v2.5', # Recommended model from docs
+        'with_diarization': 'false', # Diarization is usually Batch-only or a separate feature/model.
     }
+    
+    # --- Final Corrected Endpoint ---
+    REST_API_ENDPOINT = f"{SARVAM_BASE_URL}/v1/speech-to-text"
 
     try:
-        # 1. Send the synchronous request
+        # 2. Send the synchronous request
         response = requests.post(
             REST_API_ENDPOINT,
             headers=headers,
@@ -86,18 +86,17 @@ def transcribe_audio_sarvam_api(audio_bytes):
         
         response_data = response.json()
         
-        # 2. Extract the transcript
-        # Check if the expected 'transcript' key exists in the response
+        # 3. Extract the transcript
         if 'transcript' in response_data:
             return response_data['transcript']
         
-        # Handle API response error specific to content/processing
+        # Handle API error response specific to content/processing failure
         error_message = response_data.get('message', 'Unknown processing error from Sarvam.')
         return f"Sarvam Transcription Error: {error_message}"
 
     except requests.exceptions.HTTPError as e:
         # This catches Authentication (401), Not Found (404), or Server Errors (500)
-        return f"Sarvam API Failed: HTTP Error {e.response.status_code}. Check API key or endpoint: {REST_API_ENDPOINT}"
+        return f"Sarvam API Failed: HTTP Error {e.response.status_code}. Check key or endpoint: {REST_API_ENDPOINT}"
     except requests.exceptions.RequestException as e:
         return f"Network Error: Could not connect to Sarvam API. Details: {e}"
 

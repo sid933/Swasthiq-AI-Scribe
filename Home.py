@@ -13,7 +13,7 @@ def check_login():
     
     if password == "swasthiq2025": # Simple hardcoded password for MVP
         st.session_state.logged_in = True
-        st.experimental_rerun()
+        st.rerun()
     elif password:
         st.error("Invalid password. Please contact support.")
 

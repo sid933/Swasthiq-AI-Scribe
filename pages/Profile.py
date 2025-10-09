@@ -18,4 +18,4 @@ st.markdown("""
 st.subheader("User Actions")
 if st.button("Reset All Session Data"):
     st.session_state.clear()
-    st.experimental_rerun()
+    st.rerun()
